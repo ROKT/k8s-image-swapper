@@ -12,6 +12,7 @@ import (
 	"github.com/containers/image/v5/transports/alltransports"
 	ctypes "github.com/containers/image/v5/types"
 	"github.com/estahn/k8s-image-swapper/pkg/config"
+	"github.com/estahn/k8s-image-swapper/pkg/metrics"
 	"github.com/estahn/k8s-image-swapper/pkg/registry"
 	"github.com/estahn/k8s-image-swapper/pkg/secrets"
 	types "github.com/estahn/k8s-image-swapper/pkg/types"
@@ -216,12 +217,14 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 				log.Ctx(lctx).Debug().Str("repository", createRepoName).Msg("create repository")
 				if err := p.registryClient.CreateRepository(createRepoName); err != nil {
 					log.Err(err)
+					metrics.IncrementEcrError(ar.Namespace, srcRef.DockerReference().String(), createRepoName, "CreateRepositoryFail")
 				}
 
 				// Retrieve secrets and auth credentials
 				imagePullSecrets, err := p.imagePullSecretProvider.GetImagePullSecrets(pod)
 				if err != nil {
 					log.Err(err)
+					metrics.IncrementEcrError(ar.Namespace, srcRef.DockerReference().String(), createRepoName, "GetImagePullSecretsFail")
 				}
 
 				authFile, err := imagePullSecrets.AuthFile()
@@ -229,12 +232,14 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 					defer func() {
 						if err := os.RemoveAll(authFile.Name()); err != nil {
 							log.Err(err)
+							metrics.IncrementEcrError(ar.Namespace, srcRef.DockerReference().String(), createRepoName, "AuthFileFail")
 						}
 					}()
 				}
 
 				if err != nil {
 					log.Err(err)
+					metrics.IncrementEcrError(ar.Namespace, srcRef.DockerReference().String(), createRepoName, "Unknown")
 				}
 
 				// Copy image
@@ -244,6 +249,7 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 				log.Ctx(lctx).Trace().Str("source", srcRef.DockerReference().String()).Str("target", targetImage).Msg("copy image")
 				if err := copyImage(srcRef.DockerReference().String(), authFile.Name(), targetImage, p.registryClient.Credentials()); err != nil {
 					log.Ctx(lctx).Err(err).Str("source", srcRef.DockerReference().String()).Str("target", targetImage).Msg("copying image to target registry failed")
+					metrics.IncrementEcrError(ar.Namespace, srcRef.DockerReference().String(), createRepoName, "CopyImageFail")
 				}
 			}
 

@@ -28,22 +28,13 @@ import (
 )
 
 var (
-	metricLabels  = []string{"namespace", "registry", "repo"}
-	swapperErrors = prometheus.NewCounterVec(
+	metricLabels = []string{"namespace", "registry", "repo"}
+	ecrErrors    = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "k8s_image_swapper",
-			Subsystem: "swapping",
+			Subsystem: "ecr",
 			Name:      "errors",
-			Help:      "Number of errors",
-		},
-		metricLabels,
-	)
-	numberOfSwaps = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "k8s_image_swapper",
-			Subsystem: "swaping",
-			Name:      "swaps",
-			Help:      "Number of swaps for the repo",
+			Help:      "Number of ecr errors",
 		},
 		metricLabels,
 	)
@@ -54,20 +45,17 @@ var PromReg *prometheus.Registry
 func init() {
 	PromReg = prometheus.NewRegistry()
 	PromReg.MustRegister(collectors.NewGoCollector())
-	PromReg.MustRegister(swapperErrors)
-	PromReg.MustRegister(numberOfSwaps)
-
+	PromReg.MustRegister(ecrErrors)
 }
 
-// PrometheusMetricServer the type of MetricsServer
-type PrometheusMetricServer struct{}
-
-// RecordSwapError counts the number of swapping errors
-func (metricsServer PrometheusMetricServer) RecordSwapError(namespace string, registry string, repo string) {
-	labels := getLabels(namespace, registry, repo)
-	swapperErrors.With(labels).Inc()
-}
-
-func getLabels(namespace string, registry string, repo string) prometheus.Labels {
-	return prometheus.Labels{"namespace": namespace, "registry": registry, "repo": repo}
+// Increments the counter of ecr errors
+func IncrementEcrError(resource_namespace string, registry string, repo string, errType string) {
+	ecrErrors.With(
+		prometheus.Labels{
+			"resource_namespace": resource_namespace,
+			"registry":           registry,
+			"repo":               repo,
+			"error_type":         errType,
+		},
+	).Inc()
 }

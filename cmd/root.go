@@ -42,6 +42,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	kwhhttp "github.com/slok/kubewebhook/v2/pkg/http"
+	kwhprometheus "github.com/slok/kubewebhook/v2/pkg/metrics/prometheus"
+	kwhwebhook "github.com/slok/kubewebhook/v2/pkg/webhook"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"k8s.io/client-go/kubernetes"
@@ -93,8 +95,20 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 			os.Exit(1)
 		}
 
+		// Configure builtin webhook metrics
+		recorderConfig := kwhprometheus.RecorderConfig{
+			Registry: metrics.PromReg,
+		}
+
+		promRecorder, err := kwhprometheus.NewRecorder(recorderConfig)
+		if err != nil {
+			log.Err(err).Msg("could not create prometheus metrics recorder")
+		}
+
 		// Get the handler for our webhook.
-		whHandler, err := kwhhttp.HandlerFor(kwhhttp.HandlerConfig{Webhook: wh})
+		whHandler, err := kwhhttp.HandlerFor(kwhhttp.HandlerConfig{
+			Webhook: kwhwebhook.NewMeasuredWebhook(promRecorder, wh),
+		})
 		if err != nil {
 			log.Err(err).Msg("error creating webhook handler")
 			os.Exit(1)
@@ -141,9 +155,6 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 				}
 			}
 		}()
-
-		var metricServer metrics.PrometheusMetricServer
-		metricServer.RecordSwapError("a", "a", "a")
 
 		c := make(chan os.Signal, 1)
 		// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C) or SIGTERM

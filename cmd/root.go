@@ -32,6 +32,7 @@ import (
 	"os"
 
 	"github.com/estahn/k8s-image-swapper/pkg/config"
+	"github.com/estahn/k8s-image-swapper/pkg/metrics"
 	"github.com/estahn/k8s-image-swapper/pkg/registry"
 	"github.com/estahn/k8s-image-swapper/pkg/secrets"
 	"github.com/estahn/k8s-image-swapper/pkg/types"
@@ -60,8 +61,6 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	Run: func(cmd *cobra.Command, args []string) {
-		//promReg := prometheus.NewRegistry()
-		//metricsRec := metrics.NewPrometheus(promReg)
 		log.Trace().Interface("config", cfg).Msg("config")
 
 		rClient, err := registry.NewECRClient(cfg.Target.AWS.Region, cfg.Target.AWS.EcrDomain(), cfg.Target.AWS.AccountID, cfg.Target.AWS.Role, cfg.Target.AWS.AccessPolicy, cfg.Target.AWS.LifecyclePolicy)
@@ -103,7 +102,7 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 
 		handler := http.NewServeMux()
 		handler.Handle("/webhook", whHandler)
-		handler.Handle("/metrics", promhttp.Handler())
+		handler.Handle("/metrics", promhttp.HandlerFor(metrics.PromReg, promhttp.HandlerOpts{}))
 		handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			_, err := w.Write([]byte(`<html>
 			 <head><title>k8s-image-webhook</title></head>
@@ -142,6 +141,9 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 				}
 			}
 		}()
+
+		var metricServer metrics.PrometheusMetricServer
+		metricServer.RecordSwapError("a", "a", "a")
 
 		c := make(chan os.Signal, 1)
 		// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C) or SIGTERM

@@ -17,3 +17,5 @@
 .idea/
 coverage.txt
 k8s-image-swapper
+__debug_bin
+.vscode/launch.json

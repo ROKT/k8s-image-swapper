@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	metricLabels = []string{"namespace", "registry", "repo"}
+	metricLabels = []string{"resource_namespace", "registry", "repo", "error_type"}
 	ecrErrors    = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "k8s_image_swapper",

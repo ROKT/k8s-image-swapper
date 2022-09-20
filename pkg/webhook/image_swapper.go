@@ -312,6 +312,7 @@ func filterMatch(ctx FilterContext, filters []config.JMESPathFilter) bool {
 
 		if err != nil {
 			log.Err(err).Str("filter", filter.JMESPath).Msgf("Filter (idx %v) could not be evaluated.", idx)
+			metrics.IncrementError("FilterEvalFail")
 			return false
 		}
 
@@ -322,6 +323,7 @@ func filterMatch(ctx FilterContext, filters []config.JMESPathFilter) bool {
 			}
 		default:
 			log.Warn().Str("filter", filter.JMESPath).Msg("filter does not return a bool value")
+			metrics.IncrementError("FilterEvalFail")
 		}
 	}
 

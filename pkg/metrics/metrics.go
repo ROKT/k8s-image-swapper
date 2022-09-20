@@ -28,6 +28,15 @@ import (
 )
 
 var (
+	errors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "k8s_image_swapper",
+			Subsystem: "main",
+			Name:      "errors",
+			Help:      "Number of errors",
+		},
+		[]string{"error_type"},
+	)
 	metricLabels = []string{"resource_namespace", "registry", "repo", "error_type"}
 	ecrErrors    = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -48,9 +57,18 @@ func init() {
 	PromReg.MustRegister(ecrErrors)
 }
 
+// Increments the counter of errors
+func IncrementError(errType string) {
+	ecrErrors.With(
+		prometheus.Labels{
+			"error_type": errType,
+		},
+	).Inc()
+}
+
 // Increments the counter of ecr errors
 func IncrementEcrError(resource_namespace string, registry string, repo string, errType string) {
-	ecrErrors.With(
+	errors.With(
 		prometheus.Labels{
 			"resource_namespace": resource_namespace,
 			"registry":           registry,

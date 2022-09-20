@@ -73,11 +73,13 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 
 		imageSwapPolicy, err := types.ParseImageSwapPolicy(cfg.ImageSwapPolicy)
 		if err != nil {
+			metrics.IncrementError("ParseImageSwapPolicyFail")
 			log.Err(err)
 		}
 
 		imageCopyPolicy, err := types.ParseImageCopyPolicy(cfg.ImageCopyPolicy)
 		if err != nil {
+			metrics.IncrementError("imageCopyPolicyFail")
 			log.Err(err)
 		}
 
@@ -92,6 +94,7 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 		)
 		if err != nil {
 			log.Err(err).Msg("error creating webhook")
+			metrics.IncrementError("NewImageSwapperWebhookWithOptsFail")
 			os.Exit(1)
 		}
 
@@ -239,6 +242,7 @@ func initConfig() {
 
 	if err := viper.Unmarshal(&cfg); err != nil {
 		log.Err(err).Msg("failed to unmarshal the config file")
+		metrics.IncrementError("ConfigUnmarshalFail")
 	}
 
 	//validate := validator.New()
@@ -273,12 +277,14 @@ func setupImagePullSecretsProvider() secrets.ImagePullSecretsProvider {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to configure Kubernetes client, will continue without reading secrets")
+		metrics.IncrementError("setupImagePullSecretsProviderFail")
 		return secrets.NewDummyImagePullSecretsProvider()
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to configure Kubernetes client, will continue without reading secrets")
+		metrics.IncrementError("setupImagePullSecretsProviderFail")
 		return secrets.NewDummyImagePullSecretsProvider()
 	}
 

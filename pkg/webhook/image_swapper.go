@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/alitto/pond"
 	"github.com/containers/image/v5/docker/reference"
 	"github.com/containers/image/v5/transports/alltransports"
 	ctypes "github.com/containers/image/v5/types"
 	"github.com/estahn/k8s-image-swapper/pkg/config"
+	"github.com/estahn/k8s-image-swapper/pkg/metrics"
 	"github.com/estahn/k8s-image-swapper/pkg/registry"
 	"github.com/estahn/k8s-image-swapper/pkg/secrets"
 	types "github.com/estahn/k8s-image-swapper/pkg/types"
@@ -182,69 +184,88 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 			normalizedName, err := imageNamesWithDigestOrTag(container.Image)
 			if err != nil {
 				log.Ctx(lctx).Warn().Msgf("unable to normalize source name %s: %v", container.Image, err)
+				metrics.IncrementError("imageNamesWithDigestOrTagFail")
 				continue
 			}
 
 			srcRef, err := alltransports.ParseImageName("docker://" + normalizedName)
 			if err != nil {
 				log.Ctx(lctx).Warn().Msgf("invalid source name %s: %v", normalizedName, err)
+				metrics.IncrementError("ParseImageNameFail")
 				continue
 			}
 
 			// skip if the source and target registry domain are equal (e.g. same ECR registries)
 			if domain := reference.Domain(srcRef.DockerReference()); domain == p.registryClient.Endpoint() {
+				metrics.IncrementCacheFiltered(ar.Namespace, reference.Domain(srcRef.DockerReference()), reference.TrimNamed(srcRef.DockerReference()).String())
 				continue
 			}
 
 			filterCtx := NewFilterContext(*ar, pod, container)
 			if filterMatch(filterCtx, p.filters) {
 				log.Ctx(lctx).Debug().Msg("skip due to filter condition")
+				metrics.IncrementCacheFiltered(ar.Namespace, reference.Domain(srcRef.DockerReference()), reference.TrimNamed(srcRef.DockerReference()).String())
 				continue
 			}
-
+			sourceImage := srcRef.DockerReference().String()
 			targetImage := p.targetName(srcRef)
 
 			copyFn := func() {
-				// Avoid unnecessary copying by ending early. For images such as :latest we adhere to the
-				// image pull policy.
-				if p.registryClient.ImageExists(targetImage) && container.ImagePullPolicy != corev1.PullAlways {
-					return
-				}
 
-				// Create repository
 				createRepoName := reference.TrimNamed(srcRef.DockerReference()).String()
-				log.Ctx(lctx).Debug().Str("repository", createRepoName).Msg("create repository")
-				if err := p.registryClient.CreateRepository(createRepoName); err != nil {
-					log.Err(err)
-				}
-
 				// Retrieve secrets and auth credentials
 				imagePullSecrets, err := p.imagePullSecretProvider.GetImagePullSecrets(pod)
 				if err != nil {
-					log.Err(err)
+					log.Err(err).Msg("getting pull secrets failed")
+					metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "GetImagePullSecretsFail")
 				}
 
 				authFile, err := imagePullSecrets.AuthFile()
 				if authFile != nil {
 					defer func() {
 						if err := os.RemoveAll(authFile.Name()); err != nil {
-							log.Err(err)
+							log.Err(err).Msg("creating auth file failed")
+							metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "AuthFileFail")
 						}
 					}()
 				}
 
-				if err != nil {
-					log.Err(err)
+				// Avoid unnecessary copying by ending early. For images such as :latest we adhere to the
+				// image pull policy.
+				if p.registryClient.TargetImageExists(targetImage) && container.ImagePullPolicy != corev1.PullAlways {
+					return
 				}
 
+				// Ensure repository exists
+				if !p.registryClient.RepositoryInCache(createRepoName) {
+					log.Ctx(lctx).Debug().Str("repository", createRepoName).Msg("create repository")
+					if err := p.registryClient.CreateRepository(createRepoName); err != nil {
+						log.Err(err).Msg("create repository failed")
+						metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "CreateRepositoryFail")
+					} else {
+						metrics.IncrementReposCreateRequests(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName)
+					}
+
+					if err != nil {
+						log.Err(err).Msg("unknown error")
+						metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "Unknown")
+					}
+				}
 				// Copy image
 				// TODO: refactor to use structure instead of passing file name / string
 				//       or transform registryClient creds into auth compatible form, e.g.
 				//       {"auths":{"aws_account_id.dkr.ecr.region.amazonaws.com":{"username":"AWS","password":"..."	}}}
-				log.Ctx(lctx).Trace().Str("source", srcRef.DockerReference().String()).Str("target", targetImage).Msg("copy image")
-				if err := copyImage(srcRef.DockerReference().String(), authFile.Name(), targetImage, p.registryClient.Credentials()); err != nil {
-					log.Ctx(lctx).Err(err).Str("source", srcRef.DockerReference().String()).Str("target", targetImage).Msg("copying image to target registry failed")
+				copyStart := time.Now()
+				log.Ctx(lctx).Trace().Str("source", sourceImage).Str("target", targetImage).Msg("copy image")
+				if err := copyImage(sourceImage, authFile.Name(), targetImage, p.registryClient.Credentials()); err != nil {
+					log.Ctx(lctx).Err(err).Str("source", sourceImage).Str("target", targetImage).Msg("copying image to target registry failed")
+					metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "CopyImageFail")
+				} else {
+					duration := time.Since(copyStart).Seconds()
+					log.Ctx(lctx).Debug().Str("source", sourceImage).Float64("duration", duration).Str("target", targetImage).Msg("copied image")
+					metrics.SetImageCopyDuration(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, duration)
 				}
+
 			}
 
 			// imageCopyPolicy
@@ -262,16 +283,20 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 			}
 
 			// imageSwapPolicy
+			repoName := reference.TrimNamed(srcRef.DockerReference()).String()
 			switch p.imageSwapPolicy {
 			case types.ImageSwapPolicyAlways:
 				log.Ctx(lctx).Debug().Str("image", targetImage).Msg("set new container image")
 				containers[i].Image = targetImage
+				metrics.IncrementCacheHits(ar.Namespace, reference.Domain(srcRef.DockerReference()), repoName)
 			case types.ImageSwapPolicyExists:
-				if p.registryClient.ImageExists(targetImage) {
+				if p.registryClient.TargetImageExists(targetImage) {
 					log.Ctx(lctx).Debug().Str("image", targetImage).Msg("set new container image")
 					containers[i].Image = targetImage
+					metrics.IncrementCacheHits(ar.Namespace, reference.Domain(srcRef.DockerReference()), repoName)
 				} else {
 					log.Ctx(lctx).Debug().Str("image", targetImage).Msg("container image not found in target registry, not swapping")
+					metrics.IncrementCacheMisses(ar.Namespace, reference.Domain(srcRef.DockerReference()), repoName)
 				}
 			default:
 				panic("unknown imageSwapPolicy")
@@ -298,7 +323,7 @@ func filterMatch(ctx FilterContext, filters []config.JMESPathFilter) bool {
 		return false
 	}
 
-	log.Debug().Interface("object", filterContext).Msg("generated filter context")
+	log.Trace().Interface("object", filterContext).Msg("generated filter context")
 
 	for idx, filter := range filters {
 		results, err := jmespath.Search(filter.JMESPath, filterContext)
@@ -306,6 +331,7 @@ func filterMatch(ctx FilterContext, filters []config.JMESPathFilter) bool {
 
 		if err != nil {
 			log.Err(err).Str("filter", filter.JMESPath).Msgf("Filter (idx %v) could not be evaluated.", idx)
+			metrics.IncrementError("FilterEvalFail")
 			return false
 		}
 
@@ -316,6 +342,7 @@ func filterMatch(ctx FilterContext, filters []config.JMESPathFilter) bool {
 			}
 		default:
 			log.Warn().Str("filter", filter.JMESPath).Msg("filter does not return a bool value")
+			metrics.IncrementError("FilterEvalFail")
 		}
 	}
 
@@ -344,7 +371,7 @@ func NewFilterContext(request kwhmodel.AdmissionReview, obj metav1.Object, conta
 	return FilterContext{Obj: obj, Container: container}
 }
 
-func copyImage(src string, srcCeds string, dest string, destCreds string) error {
+func copyImage(src string, srcCredsFilename string, dest string, destCreds string) error {
 	app := "skopeo"
 	args := []string{
 		"--override-os", "linux",
@@ -355,8 +382,8 @@ func copyImage(src string, srcCeds string, dest string, destCreds string) error 
 		"docker://" + dest,
 	}
 
-	if len(srcCeds) > 0 {
-		args = append(args, "--src-authfile", srcCeds)
+	if len(srcCredsFilename) > 0 {
+		args = append(args, "--src-authfile", srcCredsFilename)
 	} else {
 		args = append(args, "--src-no-creds")
 	}

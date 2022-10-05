@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -13,11 +14,12 @@ import (
 	"github.com/aws/aws-sdk-go/service/ecr"
 	"github.com/aws/aws-sdk-go/service/ecr/ecriface"
 	"github.com/dgraph-io/ristretto"
+	"github.com/estahn/k8s-image-swapper/pkg/metrics"
 	"github.com/go-co-op/gocron"
 	"github.com/rs/zerolog/log"
 )
 
-var execCommand = exec.Command
+var ExecCommand = exec.Command
 
 type ECRClient struct {
 	client          ecriface.ECRAPI
@@ -35,10 +37,6 @@ func (e *ECRClient) Credentials() string {
 }
 
 func (e *ECRClient) CreateRepository(name string) error {
-	if _, found := e.cache.Get(name); found {
-		return nil
-	}
-
 	_, err := e.client.CreateRepository(&ecr.CreateRepositoryInput{
 		RepositoryName: aws.String(name),
 		ImageScanningConfiguration: &ecr.ImageScanningConfiguration{
@@ -78,7 +76,7 @@ func (e *ECRClient) CreateRepository(name string) error {
 		})
 
 		if err != nil {
-			log.Err(err).Msg(err.Error())
+			log.Err(err).Str("repo", name).Str("accessPolicy", e.accessPolicy).Msg("error setting access policy on repo")
 			return err
 		}
 	}
@@ -92,14 +90,25 @@ func (e *ECRClient) CreateRepository(name string) error {
 		})
 
 		if err != nil {
-			log.Err(err).Msg(err.Error())
+			log.Err(err).Str("repo", name).Str("lifecyclePolicy", e.lifecyclePolicy).Msg("error setting lifecycle policy on repo")
 			return err
 		}
 	}
 
 	e.cache.Set(name, "", 1)
 
+	registry := strings.SplitN(name, "/", 2)[0]
+	repo := strings.SplitN(name, "/", 2)[1]
+	metrics.IncrementReposCreated(registry, repo)
+
 	return nil
+}
+
+func (e *ECRClient) RepositoryInCache(name string) bool {
+	if _, found := e.cache.Get(name); found {
+		return true
+	}
+	return false
 }
 
 func (e *ECRClient) RepositoryExists() bool {
@@ -118,7 +127,7 @@ func (e *ECRClient) PutImage() error {
 	panic("implement me")
 }
 
-func (e *ECRClient) ImageExists(ref string) bool {
+func (e *ECRClient) TargetImageExists(ref string) bool {
 	if _, found := e.cache.Get(ref); found {
 		return true
 	}
@@ -131,13 +140,16 @@ func (e *ECRClient) ImageExists(ref string) bool {
 		"--creds", e.Credentials(),
 	}
 
-	log.Trace().Str("app", app).Strs("args", args).Msg("executing command to inspect image")
-	cmd := execCommand(app, args...)
+	log.Trace().Str("app", app).Strs("args", args).Msg("executing command to inspect target image")
+	cmd := ExecCommand(app, args...)
 
-	if _, err := cmd.Output(); err != nil {
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Trace().Str("output", string(output)).Msg("skopeo inspect target failed")
 		return false
 	}
 
+	log.Trace().Str("output", string(output)).Msg("skopeo inspect target succeeded")
 	e.cache.Set(ref, "", 1)
 
 	return true

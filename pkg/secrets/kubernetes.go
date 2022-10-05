@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/estahn/k8s-image-swapper/pkg/metrics"
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/rs/zerolog/log"
 	v1 "k8s.io/api/core/v1"
@@ -73,6 +74,7 @@ func (p *KubernetesImagePullSecretsProvider) GetImagePullSecrets(pod *v1.Pod) (*
 		Get(context.TODO(), pod.Spec.ServiceAccountName, metav1.GetOptions{})
 	if err != nil {
 		log.Err(err).Msg("error fetching referenced service account, continue without service account imagePullSecrets")
+		metrics.IncrementError("kubernetesClientFail")
 	}
 
 	if serviceAccount != nil {
@@ -89,6 +91,7 @@ func (p *KubernetesImagePullSecretsProvider) GetImagePullSecrets(pod *v1.Pod) (*
 		secret, err := p.kubernetesClient.CoreV1().Secrets(pod.Namespace).Get(context.TODO(), imagePullSecret.Name, metav1.GetOptions{})
 		if err != nil {
 			log.Err(err).Msg("error fetching secret, continue without imagePullSecrets")
+			metrics.IncrementError("kubernetesClientFail")
 		}
 
 		if secret == nil || secret.Type != v1.SecretTypeDockerConfigJson {

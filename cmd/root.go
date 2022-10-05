@@ -32,6 +32,7 @@ import (
 	"os"
 
 	"github.com/estahn/k8s-image-swapper/pkg/config"
+	"github.com/estahn/k8s-image-swapper/pkg/metrics"
 	"github.com/estahn/k8s-image-swapper/pkg/registry"
 	"github.com/estahn/k8s-image-swapper/pkg/secrets"
 	"github.com/estahn/k8s-image-swapper/pkg/types"
@@ -41,6 +42,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	kwhhttp "github.com/slok/kubewebhook/v2/pkg/http"
+	kwhprometheus "github.com/slok/kubewebhook/v2/pkg/metrics/prometheus"
+	kwhwebhook "github.com/slok/kubewebhook/v2/pkg/webhook"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"k8s.io/client-go/kubernetes"
@@ -60,8 +63,6 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	Run: func(cmd *cobra.Command, args []string) {
-		//promReg := prometheus.NewRegistry()
-		//metricsRec := metrics.NewPrometheus(promReg)
 		log.Trace().Interface("config", cfg).Msg("config")
 
 		rClient, err := registry.NewECRClient(cfg.Target.AWS.Region, cfg.Target.AWS.EcrDomain(), cfg.Target.AWS.AccountID, cfg.Target.AWS.Role, cfg.Target.AWS.AccessPolicy, cfg.Target.AWS.LifecyclePolicy)
@@ -72,11 +73,13 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 
 		imageSwapPolicy, err := types.ParseImageSwapPolicy(cfg.ImageSwapPolicy)
 		if err != nil {
+			metrics.IncrementError("ParseImageSwapPolicyFail")
 			log.Err(err)
 		}
 
 		imageCopyPolicy, err := types.ParseImageCopyPolicy(cfg.ImageCopyPolicy)
 		if err != nil {
+			metrics.IncrementError("imageCopyPolicyFail")
 			log.Err(err)
 		}
 
@@ -91,11 +94,24 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 		)
 		if err != nil {
 			log.Err(err).Msg("error creating webhook")
+			metrics.IncrementError("NewImageSwapperWebhookWithOptsFail")
 			os.Exit(1)
 		}
 
+		// Configure builtin webhook metrics
+		recorderConfig := kwhprometheus.RecorderConfig{
+			Registry: metrics.PromReg,
+		}
+
+		promRecorder, err := kwhprometheus.NewRecorder(recorderConfig)
+		if err != nil {
+			log.Err(err).Msg("could not create prometheus metrics recorder")
+		}
+
 		// Get the handler for our webhook.
-		whHandler, err := kwhhttp.HandlerFor(kwhhttp.HandlerConfig{Webhook: wh})
+		whHandler, err := kwhhttp.HandlerFor(kwhhttp.HandlerConfig{
+			Webhook: kwhwebhook.NewMeasuredWebhook(promRecorder, wh),
+		})
 		if err != nil {
 			log.Err(err).Msg("error creating webhook handler")
 			os.Exit(1)
@@ -103,7 +119,7 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 
 		handler := http.NewServeMux()
 		handler.Handle("/webhook", whHandler)
-		handler.Handle("/metrics", promhttp.Handler())
+		handler.Handle("/metrics", promhttp.HandlerFor(metrics.PromReg, promhttp.HandlerOpts{}))
 		handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			_, err := w.Write([]byte(`<html>
 			 <head><title>k8s-image-webhook</title></head>
@@ -226,6 +242,7 @@ func initConfig() {
 
 	if err := viper.Unmarshal(&cfg); err != nil {
 		log.Err(err).Msg("failed to unmarshal the config file")
+		metrics.IncrementError("ConfigUnmarshalFail")
 	}
 
 	//validate := validator.New()
@@ -260,12 +277,14 @@ func setupImagePullSecretsProvider() secrets.ImagePullSecretsProvider {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to configure Kubernetes client, will continue without reading secrets")
+		metrics.IncrementError("setupImagePullSecretsProviderFail")
 		return secrets.NewDummyImagePullSecretsProvider()
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to configure Kubernetes client, will continue without reading secrets")
+		metrics.IncrementError("setupImagePullSecretsProviderFail")
 		return secrets.NewDummyImagePullSecretsProvider()
 	}
 

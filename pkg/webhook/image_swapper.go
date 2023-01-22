@@ -377,6 +377,7 @@ func copyImage(src string, srcCredsFilename string, dest string, destCreds strin
 		"--override-os", "linux",
 		"copy",
 		"--all",
+		"--multi-arch", "all",
 		"--retry-times", "3",
 		"docker://" + src,
 		"docker://" + dest,

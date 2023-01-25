@@ -211,7 +211,13 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 			targetImage := p.targetName(srcRef)
 
 			copyFn := func() {
+				// Avoid unnecessary copying by ending early. For images such as :latest we adhere to the
+				// image pull policy.
+				if p.registryClient.ImageExists(targetImage) && container.ImagePullPolicy != corev1.PullAlways {
+					return
+				}
 
+				// Create repository
 				createRepoName := reference.TrimNamed(srcRef.DockerReference()).String()
 				log.Ctx(lctx).Debug().Str("repository", createRepoName).Msg("create repository")
 				if err := p.registryClient.CreateRepository(createRepoName); err != nil {

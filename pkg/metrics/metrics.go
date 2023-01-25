@@ -100,6 +100,7 @@ var (
 	)
 	reposCreated = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
+			Namespace: "k8s_image_swapper",
 			Subsystem: "cache",
 			Name:      "repos_created",
 			Help:      "Number of repositories created",

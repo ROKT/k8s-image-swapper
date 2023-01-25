@@ -78,6 +78,7 @@ nav:
   - Getting started: getting-started.md
   - Configuration: configuration.md
   - FAQ: faq.md
+  - Metrics: metrics.md
 #  - Operations:
 #    - Production considerations: foo
 #  - FAQ: faq.md

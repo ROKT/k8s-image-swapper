@@ -235,6 +235,8 @@ func readAdmissionReviewFromFile(filename string) (*admissionv1.AdmissionReview,
 func TestImageSwapper_Mutate(t *testing.T) {
 	execCommand = fakeExecCommand
 	defer func() { execCommand = exec.Command }()
+	registry.ExecCommand = fakeExecCommand
+	defer func() { registry.ExecCommand = exec.Command }()
 
 	ecrClient := new(mockECRClient)
 	ecrClient.On(
@@ -335,6 +337,8 @@ func TestImageSwapper_Mutate(t *testing.T) {
 func TestImageSwapper_MutateWithImagePullSecrets(t *testing.T) {
 	execCommand = fakeExecCommand
 	defer func() { execCommand = exec.Command }()
+	registry.ExecCommand = fakeExecCommand
+	defer func() { registry.ExecCommand = exec.Command }()
 
 	ecrClient := new(mockECRClient)
 	ecrClient.On(

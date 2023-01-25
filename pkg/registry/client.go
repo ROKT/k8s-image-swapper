@@ -4,6 +4,7 @@ package registry
 type Client interface {
 	CreateRepository(string) error
 	RepositoryExists() bool
+	RepositoryInCache(string) bool
 	CopyImage() error
 	PullImage() error
 	PutImage() error

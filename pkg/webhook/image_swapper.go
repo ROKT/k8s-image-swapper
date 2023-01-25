@@ -213,44 +213,33 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 			copyFn := func() {
 
 				createRepoName := reference.TrimNamed(srcRef.DockerReference()).String()
+				log.Ctx(lctx).Debug().Str("repository", createRepoName).Msg("create repository")
+				if err := p.registryClient.CreateRepository(createRepoName); err != nil {
+					log.Err(err).Str("repository", createRepoName).Msg("failed to create repository")
+					metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "CreateRepositoryFail")
+				} else {
+					metrics.IncrementReposCreateRequests(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName)
+				}
+
 				// Retrieve secrets and auth credentials
 				imagePullSecrets, err := p.imagePullSecretProvider.GetImagePullSecrets(pod)
 				if err != nil {
-					log.Err(err).Msg("getting pull secrets failed")
+					log.Err(err).Msg("failed to retrieve image pull secrets from provider")
 					metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "GetImagePullSecretsFail")
 				}
 
 				authFile, err := imagePullSecrets.AuthFile()
-				if authFile != nil {
-					defer func() {
-						if err := os.RemoveAll(authFile.Name()); err != nil {
-							log.Err(err).Msg("creating auth file failed")
-							metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "AuthFileFail")
-						}
-					}()
+				if err != nil {
+					log.Err(err).Msg("failed generating authFile")
 				}
 
-				// Avoid unnecessary copying by ending early. For images such as :latest we adhere to the
-				// image pull policy.
-				if p.registryClient.TargetImageExists(targetImage) && container.ImagePullPolicy != corev1.PullAlways {
-					return
-				}
-
-				// Ensure repository exists
-				if !p.registryClient.RepositoryInCache(createRepoName) {
-					log.Ctx(lctx).Debug().Str("repository", createRepoName).Msg("create repository")
-					if err := p.registryClient.CreateRepository(createRepoName); err != nil {
-						log.Err(err).Msg("create repository failed")
-						metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "CreateRepositoryFail")
-					} else {
-						metrics.IncrementReposCreateRequests(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName)
+				defer func() {
+					if err := os.RemoveAll(authFile.Name()); err != nil {
+						log.Err(err).Str("file", authFile.Name()).Msg("failed removing auth file")
+						metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "AuthFileFail")
 					}
+				}()
 
-					if err != nil {
-						log.Err(err).Msg("unknown error")
-						metrics.IncrementEcrError(ar.Namespace, reference.Domain(srcRef.DockerReference()), createRepoName, "Unknown")
-					}
-				}
 				// Copy image
 				// TODO: refactor to use structure instead of passing file name / string
 				//       or transform registryClient creds into auth compatible form, e.g.
@@ -376,7 +365,6 @@ func copyImage(src string, srcCredsFilename string, dest string, destCreds strin
 	args := []string{
 		"--override-os", "linux",
 		"copy",
-		"--all",
 		"--multi-arch", "all",
 		"--retry-times", "3",
 		"docker://" + src,

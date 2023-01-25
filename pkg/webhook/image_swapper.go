@@ -279,7 +279,7 @@ func (p *ImageSwapper) Mutate(ctx context.Context, ar *kwhmodel.AdmissionReview,
 				containers[i].Image = targetImage
 				metrics.IncrementCacheHits(ar.Namespace, reference.Domain(srcRef.DockerReference()), repoName)
 			case types.ImageSwapPolicyExists:
-				if p.registryClient.TargetImageExists(targetImage) {
+				if p.registryClient.ImageExists(targetImage) {
 					log.Ctx(lctx).Debug().Str("image", targetImage).Msg("set new container image")
 					containers[i].Image = targetImage
 					metrics.IncrementCacheHits(ar.Namespace, reference.Domain(srcRef.DockerReference()), repoName)

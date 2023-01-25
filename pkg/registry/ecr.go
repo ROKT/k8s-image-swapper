@@ -139,7 +139,7 @@ func (e *ECRClient) PutImage() error {
 	panic("implement me")
 }
 
-func (e *ECRClient) TargetImageExists(ref string) bool {
+func (e *ECRClient) ImageExists(ref string) bool {
 	if _, found := e.cache.Get(ref); found {
 		return true
 	}

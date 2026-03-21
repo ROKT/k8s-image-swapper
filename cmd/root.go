@@ -72,12 +72,12 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 
 		imageSwapPolicy, err := types.ParseImageSwapPolicy(cfg.ImageSwapPolicy)
 		if err != nil {
-			log.Err(err)
+			log.Err(err).Msg("parsing image swap policy failed")
 		}
 
 		imageCopyPolicy, err := types.ParseImageCopyPolicy(cfg.ImageCopyPolicy)
 		if err != nil {
-			log.Err(err)
+			log.Err(err).Msg("parsing image copy policy failed")
 		}
 
 		imagePullSecretProvider := setupImagePullSecretsProvider()
@@ -114,7 +114,7 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 			 </html>`))
 
 			if err != nil {
-				log.Error()
+				log.Error().Err(err).Msg("error writing HTTP response")
 			}
 		})
 
@@ -131,12 +131,12 @@ A mutating webhook for Kubernetes, pointing the images to a new location.`,
 			log.Info().Msgf("Listening on %v", cfg.ListenAddress)
 			//err = http.ListenAndServeTLS(":8080", cfg.certFile, cfg.keyFile, whHandler)
 			if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-				if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
+				if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
 					log.Err(err).Msg("error serving webhook")
 					os.Exit(1)
 				}
 			} else {
-				if err := srv.ListenAndServe(); err != nil {
+				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Err(err).Msg("error serving webhook")
 					os.Exit(1)
 				}
@@ -238,6 +238,9 @@ func initConfig() {
 // initLogger configures the log level
 func initLogger() {
 	if cfg.LogFormat == "console" {
+		log.Warn().Msg("console log format is not recommended for production: " +
+			"log aggregation systems (e.g. Datadog) may misclassify all stderr output as errors. " +
+			"Use --log-format=json instead.")
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
 
